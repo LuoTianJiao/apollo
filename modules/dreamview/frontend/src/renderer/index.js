@@ -6,6 +6,7 @@ import PARAMETERS from "store/config/parameters.yml";
 import Coordinates from "renderer/coordinates";
 import AutoDrivingCar from "renderer/adc";
 import Ground from "renderer/ground";
+import TileGround from "renderer/tileground";
 import Map from "renderer/map";
 import PlanningTrajectory from "renderer/trajectory.js";
 import PerceptionObstacles from "renderer/obstacles.js";
@@ -34,8 +35,9 @@ class Renderer {
             height: 0,
         };
 
-        // The ground. (grid for now)
-        this.ground = new Ground();
+        // The ground.
+        this.ground = (PARAMETERS.ground.type === 'tile' || OFFLINE_PLAYBACK)
+                      ? new TileGround() : new Ground();
 
         // The map.
         this.map = new Map();
@@ -250,8 +252,10 @@ class Renderer {
                                                                    false);
     }
 
-    addDefaultEndPoint(point) {
-        this.routingEditor.addRoutingPoint(point, this.coordinates, this.scene);
+    addDefaultEndPoint(points) {
+        for (let i = 0; i < points.length; i++) {
+            this.routingEditor.addRoutingPoint(points[i], this.coordinates, this.scene);
+        }
     }
 
     removeAllRoutingPoints() {
@@ -304,7 +308,7 @@ class Renderer {
 
         // Upon the first time in render() it sees ground mesh loaded,
         // added it to the scene.
-        if (!this.ground.initialized) {
+        if (this.ground.type === "default" && !this.ground.initialized) {
             this.ground.initialize(this.coordinates);
             this.ground.mesh.name = "ground";
             this.scene.add(this.ground.mesh);
@@ -327,11 +331,16 @@ class Renderer {
 
     updateWorld(world, planningData) {
         this.adc.update(world, this.coordinates);
+        this.ground.update(world, this.coordinates, this.scene);
         this.planningTrajectory.update(world, planningData, this.coordinates, this.scene);
         this.perceptionObstacles.update(world, this.coordinates, this.scene);
         this.decision.update(world, this.coordinates, this.scene);
         this.prediction.update(world, this.coordinates, this.scene);
         this.routing.update(world, this.coordinates, this.scene);
+    }
+
+    updateGroundMetadata(serverUrl, mapInfo) {
+        this.ground.initialize(serverUrl, mapInfo);
     }
 
     updateMap(newData) {
@@ -354,6 +363,10 @@ class Renderer {
     }
 
     getGeolocation(event) {
+        if (!this.coordinates.isInitialized()) {
+            return;
+        }
+
         const canvasPosition = event.currentTarget.getBoundingClientRect();
 
         const vector = new THREE.Vector3(

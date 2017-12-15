@@ -30,40 +30,8 @@ cc_library(
         "//modules/canbus/common:canbus_common",
         "//modules/canbus/proto:canbus_proto",
         "//modules/common/util",
-        "//modules/monitor/common:monitor_interface",
-    ],
-)
-
-cc_binary(
-    name = "can_check",
-    srcs = [
-        "can_check.cc",
-    ],
-    deps = [
-        ":can_checker_factory",
-        "//external:gflags",
-        "//modules/canbus/common:canbus_common",
-        "//modules/canbus/proto:canbus_proto",
-        "//modules/common/util",
-        "//modules/hmi/utils:hmi_status_helper",
-        "//modules/monitor/hardware:hardware_check_utils",
-    ],
-)
-
-cc_binary(
-    name = "mock_can_check",
-    srcs = [
-        "can_check.cc",
-    ],
-    defines = ["DEBUG"],
-    deps = [
-        ":can_checker_factory",
-        "//external:gflags",
-        "//modules/canbus/common:canbus_common",
-        "//modules/canbus/proto:canbus_proto",
-        "//modules/common/util",
-        "//modules/hmi/utils:hmi_status_helper",
-        "//modules/monitor/hardware:hardware_check_utils",
+        "//modules/monitor/common:monitor_manager",
+        "//modules/monitor/common:recurrent_runner",
     ],
 )
 

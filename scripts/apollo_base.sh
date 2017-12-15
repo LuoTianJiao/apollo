@@ -105,7 +105,7 @@ function check_in_docker() {
 function set_lib_path() {
   if [ "$RELEASE_DOCKER" == 1 ];then
     source /apollo/ros/setup.bash
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apollo/lib
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/apollo/lib:/usr/local/local_integ/lib
     PY_LIB_PATH=/apollo/lib
     PY_TOOLS_PATH=/apollo/modules/tools
   else
@@ -173,15 +173,12 @@ function find_device() {
 
 function setup_device() {
   # setup CAN device
-  if [ ! -e /dev/can0 ]; then
-    sudo mknod --mode=a+rw /dev/can0 c 52 0
-  fi
-  if [ ! -e /dev/can1 ]; then
-    sudo mknod --mode=a+rw /dev/can1 c 52 1
-  fi
-  if [ ! -e /dev/can2 ]; then
-    sudo mknod --mode=a+rw /dev/can2 c 52 2
-  fi
+  for INDEX in `seq 0 3`
+  do
+      if [ ! -e /dev/can${INDEX} ]; then
+          sudo mknod --mode=a+rw /dev/can${INDEX} c 52 $INDEX
+      fi
+  done
 
   MACHINE_ARCH=$(uname -m)
   if [ "$MACHINE_ARCH" == 'aarch64' ]; then
@@ -207,17 +204,6 @@ function setup_device() {
 
   if [ ! -e /dev/nvidia-uvm-tools ];then
     sudo mknod -m 666 /dev/nvidia-uvm-tools c 243 1
-  fi
-
-  # setup camera devices
-  if [ ! -e /dev/camera ]; then
-      sudo mkdir /dev/camera
-  fi
-  if [ ! -e /dev/camera/obstacle ]; then
-      sudo ln -s /dev/video0  /dev/camera/obstacle
-  fi
-  if [ ! -e /dev/camera/trafficlights ]; then
-      sudo ln -s /dev/video1  /dev/camera/trafficlights
   fi
 }
 
@@ -403,7 +389,10 @@ function run() {
   run_customized_path $module $module "$@"
 }
 
-check_in_docker
-create_data_dir
-set_lib_path
-determine_bin_prefix
+if [ -z $APOLLO_BASE_SOURCED ]; then
+  check_in_docker
+  create_data_dir
+  set_lib_path
+  determine_bin_prefix
+  export APOLLO_BASE_SOURCED=1
+fi

@@ -98,7 +98,6 @@ bool QpSplinePathGenerator::Generate(
   if (is_change_lane_path_) {
     ref_l_ = init_frenet_point_.l();
   }
-
   double start_s = init_frenet_point_.s();
 
   constexpr double kDefaultPathLength = 50.0;
@@ -260,10 +259,11 @@ bool QpSplinePathGenerator::InitSpline(const double start_s,
   spline_generator_->Reset(knots_, qp_spline_path_config_.spline_order());
 
   // set evaluated_s_
-  uint32_t constraint_num = 3 * number_of_spline + 1;
+  uint32_t constraint_num =
+      (end_s - start_s) / qp_spline_path_config_.max_constraint_interval() + 1;
   common::util::uniform_slice(start_s, end_s, constraint_num - 1,
                               &evaluated_s_);
-  return true;
+  return (knots_.size() > 1) && !evaluated_s_.empty();
 }
 
 bool QpSplinePathGenerator::AddConstraint(const QpFrenetFrame& qp_frenet_frame,
@@ -312,12 +312,13 @@ bool QpSplinePathGenerator::AddConstraint(const QpFrenetFrame& qp_frenet_frame,
 
   ADEBUG << "lat_shift = " << lat_shift;
   const double kEndPointBoundaryEpsilon = 1e-2;
-  constexpr double kReservedDistance = 10.0;
-  spline_constraint->AddPointConstraintInRange(
+  constexpr double kReservedDistance = 20.0;
+  const double target_s =
       std::fmin(qp_spline_path_config_.point_constraint_s_position(),
                 kReservedDistance + init_frenet_point_.s() +
-                    init_trajectory_point_.v() * FLAGS_look_forward_time_sec),
-      lat_shift, kEndPointBoundaryEpsilon);
+                    init_trajectory_point_.v() * FLAGS_look_forward_time_sec);
+  spline_constraint->AddPointConstraintInRange(target_s, lat_shift,
+                                               kEndPointBoundaryEpsilon);
   if (!is_change_lane_path_) {
     spline_constraint->AddPointDerivativeConstraintInRange(
         evaluated_s_.back(), 0.0, kEndPointBoundaryEpsilon);
@@ -368,7 +369,7 @@ bool QpSplinePathGenerator::AddConstraint(const QpFrenetFrame& qp_frenet_frame,
     auto static_obs_boundary = qp_frenet_frame.GetStaticObstacleBound().at(i);
     auto dynamic_obs_boundary = qp_frenet_frame.GetDynamicObstacleBound().at(i);
 
-    if (evaluated_s_.at(i) - evaluated_s_.at(0) <
+    if (evaluated_s_.at(i) - evaluated_s_.front() <
         qp_spline_path_config_.cross_lane_longitudinal_extension()) {
       road_boundary.first =
           std::fmin(road_boundary.first, init_frenet_point_.l() - lateral_buf);
@@ -381,14 +382,15 @@ bool QpSplinePathGenerator::AddConstraint(const QpFrenetFrame& qp_frenet_frame,
     boundary_high.emplace_back(common::util::MinElement(
         std::vector<double>{road_boundary.second, static_obs_boundary.second,
                             dynamic_obs_boundary.second}));
-    ADEBUG << "s:" << evaluated_s_[i] << " boundary_low:" << boundary_low.back()
-           << " boundary_high:" << boundary_high.back()
-           << " road_boundary_low: " << road_boundary.first
-           << " road_boundary_high: " << road_boundary.second
-           << " static_obs_boundary_low: " << static_obs_boundary.first
-           << " static_obs_boundary_high: " << static_obs_boundary.second
-           << " dynamic_obs_boundary_low: " << dynamic_obs_boundary.first
-           << " dynamic_obs_boundary_high: " << dynamic_obs_boundary.second;
+    ADEBUG << "s[" << evaluated_s_[i] << "] boundary_low["
+           << boundary_low.back() << "] boundary_high[" << boundary_high.back()
+           << "] road_boundary_low[" << road_boundary.first
+           << "] road_boundary_high[" << road_boundary.second
+           << "] static_obs_boundary_low[" << static_obs_boundary.first
+           << "] static_obs_boundary_high[" << static_obs_boundary.second
+           << "] dynamic_obs_boundary_low[" << dynamic_obs_boundary.first
+           << "] dynamic_obs_boundary_high[" << dynamic_obs_boundary.second
+           << "].";
   }
 
   if (planning_debug_) {

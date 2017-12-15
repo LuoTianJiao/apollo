@@ -59,11 +59,6 @@ void ContiRadarMessageManager::set_can_client(
 ProtocolData<ContiRadar> *ContiRadarMessageManager::GetMutableProtocolDataById(
     const uint32_t message_id) {
   uint32_t converted_message_id = message_id;
-  if (message_id >= 0x500 && message_id <= 0x539) {
-    // repeated obstacle info
-    converted_message_id = 0x500;
-  }
-
   if (protocol_data_map_.find(converted_message_id) ==
       protocol_data_map_.end()) {
     ADEBUG << "Unable to get protocol data because of invalid message_id:"
@@ -82,30 +77,29 @@ void ContiRadarMessageManager::Parse(const uint32_t message_id,
   }
 
   std::lock_guard<std::mutex> lock(sensor_data_mutex_);
-  if (!is_configured_ && message_id != 0x201) {
+  if (!is_configured_ && message_id != RadarState201::ID) {
     // read radar state message first
     return;
   }
 
   // trigger publishment
-  if (message_id == 0x600 || message_id == 0x60A) {
+  if (message_id == ClusterListStatus600::ID ||
+      message_id == ObjectListStatus60A::ID) {
     ADEBUG << sensor_data_.ShortDebugString();
 
-    if (sensor_data_.contiobs_size() >
+    if (sensor_data_.contiobs_size() <=
         sensor_data_.object_list_status().nof_objects()) {
       // maybe lost a object_list_status msg
-      return;
+      AdapterManager::PublishContiRadar(sensor_data_);
     }
-
-    AdapterManager::FillContiRadarHeader(FLAGS_sensor_node_name, &sensor_data_);
-    AdapterManager::PublishContiRadar(sensor_data_);
-
     sensor_data_.Clear();
+    // fill header when recieve the general info message
+    AdapterManager::FillContiRadarHeader(FLAGS_sensor_node_name, &sensor_data_);
   }
 
   sensor_protocol_data->Parse(data, length, &sensor_data_);
 
-  if (message_id == 0x201) {
+  if (message_id == RadarState201::ID) {
     ADEBUG << sensor_data_.ShortDebugString();
     if (sensor_data_.radar_state().send_quality() ==
             radar_config_.radar_conf().send_quality() &&
@@ -124,6 +118,7 @@ void ContiRadarMessageManager::Parse(const uint32_t message_id,
       AINFO << "configure radar again";
       SenderMessage<ContiRadar> sender_message(RadarConfig200::ID,
                                                &radar_config_);
+      sender_message.Update();
       can_client_->SendSingleFrame({sender_message.CanFrame()});
     }
   }
@@ -132,7 +127,7 @@ void ContiRadarMessageManager::Parse(const uint32_t message_id,
   // check if need to check period
   const auto it = check_ids_.find(message_id);
   if (it != check_ids_.end()) {
-    const int64_t time = apollo::common::time::AsInt64<micros>(Clock::Now());
+    const int64_t time = common::time::AsInt64<micros>(Clock::Now());
     it->second.real_period = time - it->second.last_time;
     // if period 1.5 large than base period, inc error_count
     const double period_multiplier = 1.5;

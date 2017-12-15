@@ -64,7 +64,12 @@ class Rtcm3Parser : public Parser {
   apollo::drivers::gnss::GnssEphemeris _ephemeris;
   apollo::drivers::gnss::EpochObservation _observation;
 
-  // std::map<int, adu::common::Point3D> _station_location;
+  struct Point3D {
+    double x;
+    double y;
+    double z;
+  };
+  std::map<int, Point3D> _station_location;
 };
 
 Parser *Parser::create_rtcm_v3(bool is_base_station) {
@@ -84,17 +89,15 @@ Rtcm3Parser::Rtcm3Parser(bool is_base_station) {
 }
 
 bool Rtcm3Parser::set_station_position() {
-#if 0
   auto iter = _station_location.find(_rtcm.staid);
   if (iter == _station_location.end()) {
     ROS_WARN("Station %d has no location info.", _rtcm.staid);
     return false;
   }
 
-  _observation.set_position_x(iter->second.x());
-  _observation.set_position_y(iter->second.y());
-  _observation.set_position_z(iter->second.z());
-#endif
+  _observation.set_position_x(iter->second.x);
+  _observation.set_position_y(iter->second.y);
+  _observation.set_position_z(iter->second.z);
   return true;
 }
 
@@ -139,9 +142,6 @@ void Rtcm3Parser::fill_keppler_orbit(
   int prn = 0;
   satsys(eph.sat, &prn);
   keppler_orbit.set_sat_prn(prn);
-
-  ROS_INFO_STREAM("Keppler orbit debuginfo:\r\n"
-                  << keppler_orbit.DebugString());
 }
 
 void Rtcm3Parser::fill_glonass_orbit(
@@ -322,7 +322,6 @@ bool Rtcm3Parser::process_observation() {
     sat_obs->set_band_obs_num(j);
   }
 
-  ROS_INFO_STREAM("Obeservation debuginfo:\r\n" << _observation.DebugString());
   return true;
 }
 
@@ -358,7 +357,6 @@ bool Rtcm3Parser::process_ephemerides() {
     fill_keppler_orbit(_rtcm.nav.eph[_rtcm.ephsat - 1], *obit);
   }
 
-  ROS_INFO_STREAM("Ephemeris debuginfo:\r\n" << _ephemeris.DebugString());
   return true;
 }
 
@@ -371,22 +369,20 @@ bool Rtcm3Parser::process_station_parameters() {
   ROS_INFO("Station pose (%f, %f, %f).", _rtcm.sta.pos[0], _rtcm.sta.pos[1],
            _rtcm.sta.pos[2]);
 
-#if 0
   // update station location
   auto iter = _station_location.find(_rtcm.staid);
   if (iter == _station_location.end()) {
-    adu::common::Point3D point;
+    Point3D point;
     ROS_INFO("Add pose for station id: %d.", _rtcm.staid);
-    point.set_x(_rtcm.sta.pos[0]);
-    point.set_y(_rtcm.sta.pos[1]);
-    point.set_z(_rtcm.sta.pos[2]);
+    point.x = _rtcm.sta.pos[0];
+    point.y = _rtcm.sta.pos[1];
+    point.z = _rtcm.sta.pos[2];
     _station_location.insert(std::make_pair(_rtcm.staid, point));
   } else {
-    iter->second.set_x(_rtcm.sta.pos[0]);
-    iter->second.set_y(_rtcm.sta.pos[1]);
-    iter->second.set_z(_rtcm.sta.pos[2]);
+    iter->second.x = _rtcm.sta.pos[0];
+    iter->second.y = _rtcm.sta.pos[1];
+    iter->second.z = _rtcm.sta.pos[2];
   }
-#endif
   return true;
 }
 

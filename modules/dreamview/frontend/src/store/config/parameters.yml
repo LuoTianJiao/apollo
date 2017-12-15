@@ -13,13 +13,9 @@ camera:
     near: 1
     far: 100
   Map:
-    fov: 100
-    near: 1
-    far: 3000
-  Monitor:
     fov: 70
     near: 1
-    far: 100
+    far: 4000
   laneWidth: 4.5 # original 3.32
   laneWidthToViewDistanceRatio: 5
 ground:
@@ -29,6 +25,8 @@ ground:
   xorigin: 4096
   yorigin: 4096
   xyoffset: 0
+  type: default # default or tile
+  tileRange: 4
 planning:
   # The minimum interval between two consecutive
   minInterval: 0.1
@@ -38,11 +36,11 @@ options:
   defaults:
     showModuleController: false
     showMenu: false
-    showConsole: false
     showPOI: false
     showPNCMonitor: false
-    showQuickStarter: true
     showRouteEditingBar: false
+    showTasks: true
+    showVideo: false
     showPlanningReference: false
     showPlaningDpOptimizer: false
     showPlanningQpOptimizer: false

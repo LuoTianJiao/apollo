@@ -41,6 +41,11 @@ cc_library(
 )
 
 cc_library(
+    name = "color",
+    hdrs = ["color.h"],
+)
+
+cc_library(
     name = "string_util",
     hdrs = [
         "string_util.h",
@@ -178,6 +183,46 @@ cc_test(
     deps = [
         ":points_downsampler",
         "@gtest//:main",
+    ],
+)
+
+cc_library(
+    name = "json_util",
+    srcs = [
+        "json_util.cc",
+    ],
+    hdrs = [
+        "json_util.h",
+    ],
+    deps = [
+        "//modules/common:log",
+        "//third_party/json",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+cc_test(
+    name = "json_util_test",
+    size = "small",
+    srcs = [
+        "json_util_test.cc",
+    ],
+    deps = [
+        ":json_util",
+         "//modules/common/proto:error_code_proto",
+        "@gtest//:main",
+    ],
+)
+
+cc_library(
+    name = "http_client",
+    srcs = ["http_client.cc"],
+    hdrs = ["http_client.h"],
+    deps = [
+        "//modules/common:log",
+        "//modules/common/status",
+        "//third_party/json",
+        "@curlpp//:curlpp",
     ],
 )
 

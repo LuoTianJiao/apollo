@@ -18,9 +18,9 @@
 
 VERSION=""
 ARCH=$(uname -m)
-VERSION_X86_64="dev-x86_64-20171115_2103"
+VERSION_X86_64="dev-x86_64-20171211_1820"
 VERSION_AARCH64="dev-aarch64-20170927_1111"
-if [[ $# == 1 ]];then
+if [[ $# == 1 ]]; then
     VERSION=$1
 elif [ ${ARCH} == "x86_64" ]; then
     VERSION=${VERSION_X86_64}
@@ -76,8 +76,12 @@ function main(){
     devices="${devices} $(find_device ram*)"
     devices="${devices} $(find_device loop*)"
     devices="${devices} $(find_device nvidia*)"
-    devices="${devices} $(find_device video*)"
-    devices="${devices} $(find_device camera*)"
+    devices="${devices} -v /dev/camera/obstacle:/dev/camera/obstacle "
+    devices="${devices} -v /dev/camera/trafficlights:/dev/camera/trafficlights "
+    devices="${devices} -v /dev/novatel0:/dev/novatel0"
+    devices="${devices} -v /dev/novatel1:/dev/novatel1"
+    devices="${devices} -v /dev/novatel2:/dev/novatel2"
+
     USER_ID=$(id -u)
     GRP=$(id -g -n)
     GRP_ID=$(id -g)
@@ -105,6 +109,8 @@ function main(){
         -v /media:/media \
         -v $HOME/.cache:${DOCKER_HOME}/.cache \
         -v /etc/localtime:/etc/localtime:ro \
+        -v /usr/src:/usr/src \
+        -v /lib/modules:/lib/modules \
         --net host \
         -w /apollo \
         ${devices} \
@@ -114,7 +120,6 @@ function main(){
         --shm-size 512M \
         $IMG \
         /bin/bash
-
     if [ "${USER}" != "root" ]; then
         docker exec apollo_dev bash -c '/apollo/scripts/docker_adduser.sh'
     fi

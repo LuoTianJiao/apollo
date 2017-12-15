@@ -30,9 +30,9 @@
 
 #include "modules/common/proto/pnc_point.pb.h"
 #include "modules/common/proto/vehicle_state.pb.h"
-#include "modules/map/pnc_map/pnc_map.h"
 #include "modules/planning/proto/planning.pb.h"
 
+#include "modules/map/pnc_map/pnc_map.h"
 #include "modules/planning/common/path/path_data.h"
 #include "modules/planning/common/path_decision.h"
 #include "modules/planning/common/speed/speed_data.h"
@@ -63,6 +63,7 @@ class ReferenceLineInfo {
   void SetTrajectory(const DiscretizedTrajectory& trajectory);
 
   const DiscretizedTrajectory& trajectory() const;
+  const double TrajectoryLength() const;
 
   double Cost() const { return cost_; }
   void AddCost(double cost) { cost_ += cost; }
@@ -88,7 +89,7 @@ class ReferenceLineInfo {
   SpeedData* mutable_speed_data();
   // aggregate final result together by some configuration
   bool CombinePathAndSpeedProfile(
-      const double relative_time,
+      const double relative_time, const double start_s,
       DiscretizedTrajectory* discretized_trajectory);
 
   const SLBoundary& AdcSlBoundary() const;
@@ -110,12 +111,22 @@ class ReferenceLineInfo {
 
   void ExportDecision(DecisionResult* decision_result) const;
 
+  void SetRightOfWayStatus() { status_ = ADCTrajectory::PROTECTED; }
+  ADCTrajectory::RightOfWayStatus GetRightOfWayStatus() const {
+    return status_;
+  }
+
  private:
   void ExportTurnSignal(common::VehicleSignal* signal) const;
 
   std::unique_ptr<PathObstacle> CreatePathObstacle(const Obstacle* obstacle);
   bool InitPerceptionSLBoundary(PathObstacle* path_obstacle);
 
+  void MakeDecision(DecisionResult* decision_result) const;
+  int MakeMainStopDecision(DecisionResult* decision_result) const;
+  void MakeMainMissionCompleteDecision(DecisionResult* decision_result) const;
+  void MakeEStopDecision(DecisionResult* decision_result) const;
+  void SetObjectDecisions(ObjectDecisions* object_decisions) const;
   const common::VehicleState vehicle_state_;
   const common::TrajectoryPoint adc_planning_point_;
   const ReferenceLine reference_line_;
@@ -141,6 +152,8 @@ class ReferenceLineInfo {
   LatencyStats latency_stats_;
 
   hdmap::RouteSegments lanes_;
+
+  ADCTrajectory::RightOfWayStatus status_ = ADCTrajectory::UNPROTECTED;
 
   DISALLOW_COPY_AND_ASSIGN(ReferenceLineInfo);
 };

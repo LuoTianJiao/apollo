@@ -53,14 +53,21 @@ bool SignalLight::ApplyRule(Frame* frame,
 }
 
 void SignalLight::ReadSignals() {
+  detected_signals_.clear();
   if (AdapterManager::GetTrafficLightDetection()->Empty()) {
+    return;
+  }
+  if (AdapterManager::GetTrafficLightDetection()->GetDelaySec() >
+      FLAGS_signal_expire_time_sec) {
+    ADEBUG << "traffic signals msg is expired: "
+           << AdapterManager::GetTrafficLightDetection()->GetDelaySec();
     return;
   }
   const TrafficLightDetection& detection =
       AdapterManager::GetTrafficLightDetection()->GetLatestObserved();
   for (int j = 0; j < detection.traffic_light_size(); j++) {
     const TrafficLight& signal = detection.traffic_light(j);
-    signals_[signal.id()] = &signal;
+    detected_signals_[signal.id()] = &signal;
   }
 }
 
@@ -69,15 +76,17 @@ bool SignalLight::FindValidSignalLight(
   const std::vector<hdmap::PathOverlap>& signal_lights =
       reference_line_info->reference_line().map_path().signal_overlaps();
   if (signal_lights.size() <= 0) {
+    ADEBUG << "No signal lights from reference line.";
     return false;
   }
+  signal_lights_from_path_.clear();
   for (const hdmap::PathOverlap& signal_light : signal_lights) {
     if (signal_light.start_s + FLAGS_stop_max_distance_buffer >
         reference_line_info->AdcSlBoundary().end_s()) {
-      signal_lights_.push_back(&signal_light);
+      signal_lights_from_path_.push_back(&signal_light);
     }
   }
-  return signal_lights_.size() > 0;
+  return signal_lights_from_path_.size() > 0;
 }
 
 void SignalLight::MakeDecisions(Frame* frame,
@@ -91,7 +100,8 @@ void SignalLight::MakeDecisions(Frame* frame,
   signal_light_debug->set_adc_speed(
       common::VehicleStateProvider::instance()->linear_velocity());
 
-  for (const hdmap::PathOverlap* signal_light : signal_lights_) {
+  bool has_stop = false;
+  for (const hdmap::PathOverlap* signal_light : signal_lights_from_path_) {
     const TrafficLight signal = GetSignal(signal_light->object_id);
     double stop_deceleration =
         GetStopDeceleration(reference_line_info, signal_light);
@@ -109,14 +119,20 @@ void SignalLight::MakeDecisions(Frame* frame,
          stop_deceleration < FLAGS_stop_max_deceleration) ||
         (signal.color() == TrafficLight::YELLOW &&
          stop_deceleration < FLAGS_max_deacceleration_for_yellow_light_stop)) {
-      CreateStopObstacle(frame, reference_line_info, signal_light);
+      if (CreateStopObstacle(frame, reference_line_info, signal_light)) {
+        has_stop = true;
+      }
       signal_debug->set_is_stop_wall_created(true);
     }
+  }
+  if (!has_stop) {
+    reference_line_info->SetRightOfWayStatus();
   }
 }
 
 TrafficLight SignalLight::GetSignal(const std::string& signal_id) {
-  const auto* result = apollo::common::util::FindPtrOrNull(signals_, signal_id);
+  const auto* result =
+      apollo::common::util::FindPtrOrNull(detected_signals_, signal_id);
   if (result == nullptr) {
     TrafficLight traffic_light;
     traffic_light.set_id(signal_id);
@@ -151,7 +167,7 @@ double SignalLight::GetStopDeceleration(
   return (adc_speed * adc_speed) / (2 * stop_distance);
 }
 
-void SignalLight::CreateStopObstacle(
+bool SignalLight::CreateStopObstacle(
     Frame* frame, ReferenceLineInfo* const reference_line_info,
     const hdmap::PathOverlap* signal_light) {
   const auto& reference_line = reference_line_info->reference_line();
@@ -163,7 +179,7 @@ void SignalLight::CreateStopObstacle(
       !WithinBound(0.0, reference_line.Length(), box_center_s)) {
     ADEBUG << "signal " << signal_light->object_id
            << " is not on reference line";
-    return;
+    return false;
   }
   double heading = reference_line.GetReferencePoint(stop_s).heading();
   double left_lane_width = 0.0;
@@ -191,6 +207,7 @@ void SignalLight::CreateStopObstacle(
   stop.mutable_stop()->mutable_stop_point()->set_z(0.0);
   path_decision->AddLongitudinalDecision(
       RuleConfig::RuleId_Name(config_.rule_id()), stop_wall->Id(), stop);
+  return true;
 }
 
 }  // namespace planning

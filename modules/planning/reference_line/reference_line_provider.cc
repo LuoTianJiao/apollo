@@ -25,6 +25,7 @@
 #include <limits>
 #include <utility>
 
+#include "modules/common/time/time.h"
 #include "modules/map/pnc_map/path.h"
 #include "modules/planning/common/planning_gflags.h"
 #include "modules/planning/reference_line/reference_line_provider.h"
@@ -39,6 +40,7 @@ namespace planning {
 
 using apollo::common::VehicleState;
 using apollo::common::math::Vec2d;
+using apollo::common::time::Clock;
 using apollo::hdmap::RouteSegments;
 using apollo::hdmap::LaneWaypoint;
 
@@ -54,14 +56,14 @@ void ReferenceLineProvider::Init(
     const hdmap::HDMap *base_map,
     const QpSplineReferenceLineSmootherConfig &smoother_config) {
   pnc_map_.reset(new hdmap::PncMap(base_map));
-  smoother_config_ = smoother_config;
   segment_history_.clear();
-  std::vector<double> init_t_knots;
-  spline_solver_.reset(new Spline2dSolver(init_t_knots, 1));
   if (FLAGS_enable_spiral_reference_line) {
     smoother_.reset(
         new SpiralReferenceLineSmoother(FLAGS_spiral_smoother_max_deviation));
   } else {
+    smoother_config_ = smoother_config;
+    std::vector<double> init_t_knots;
+    spline_solver_.reset(new Spline2dSolver(init_t_knots, 1));
     smoother_.reset(new QpSplineReferenceLineSmoother(smoother_config_,
                                                       spline_solver_.get()));
   }
@@ -72,11 +74,8 @@ bool ReferenceLineProvider::IsAllowChangeLane(
     const common::math::Vec2d &point,
     const std::list<RouteSegments> &route_segments) {
   if (FLAGS_reckless_change_lane) {
-    ADEBUG << "enabled reckless change lane enabled";
+    ADEBUG << "reckless change lane is enabled";
     return true;
-  }
-  if (route_segments.size() <= 1) {
-    return false;
   }
   auto forward_segment = route_segments.begin();
   while (forward_segment != route_segments.end() &&
@@ -93,12 +92,21 @@ bool ReferenceLineProvider::IsAllowChangeLane(
            << point.DebugString();
     return false;
   }
+
+  std::lock_guard<std::mutex> lock(segment_history_mutex_);
   auto history_iter = segment_history_.find(forward_segment->Id());
   if (history_iter == segment_history_.end()) {
     auto &inserter = segment_history_[forward_segment->Id()];
     inserter.min_l = std::fabs(sl.l());
     inserter.last_point = point;
     inserter.accumulate_s = 0.0;
+    segment_history_id_.push_back(forward_segment->Id());
+    constexpr int kMaxSegmentHistoryIdNum = 20;
+    if (segment_history_id_.size() > kMaxSegmentHistoryIdNum) {
+      auto front_iter = segment_history_.find(segment_history_id_.front());
+      segment_history_.erase(front_iter);
+      segment_history_id_.pop_front();
+    }
     return false;
   } else {
     history_iter->second.min_l =
@@ -107,10 +115,11 @@ bool ReferenceLineProvider::IsAllowChangeLane(
         common::util::DistanceXY(history_iter->second.last_point, point);
     history_iter->second.last_point = point;
     history_iter->second.accumulate_s += dist;
-    constexpr double kChangeLaneMinL = 0.25;
-    constexpr double kChangeLaneMinLengthFactor = 0.6;
+    constexpr double kChangeLaneMinL = 0.30;
+    constexpr double kChangeLaneMinLengthFactor = 0.3;
+
     if (history_iter->second.min_l < kChangeLaneMinL &&
-        history_iter->second.accumulate_s >=
+        std::fmax(waypoint.s, history_iter->second.accumulate_s) >=
             kChangeLaneMinLengthFactor * FLAGS_min_length_for_lane_change) {
       return true;
     }
@@ -120,22 +129,39 @@ bool ReferenceLineProvider::IsAllowChangeLane(
 
 bool ReferenceLineProvider::UpdateRoutingResponse(
     const routing::RoutingResponse &routing) {
-  std::lock_guard<std::mutex> lock(pnc_map_mutex_);
-  if (!pnc_map_->UpdateRoutingResponse(routing)) {
-    AERROR << "Failed to update routing in pnc map";
-    return false;
+  bool is_new_routing = false;
+  {
+    std::lock_guard<std::mutex> lock(pnc_map_mutex_);
+    is_new_routing = pnc_map_->IsNewRouting(routing);
+    if (is_new_routing) {
+      if (!pnc_map_->UpdateRoutingResponse(routing)) {
+        AERROR << "Failed to update routing in pnc map";
+        return false;
+      }
+      has_routing_ = true;
+    }
   }
-  if (!pnc_map_->IsSameRouting()) {
+  if (is_new_routing) {
+    std::lock_guard<std::mutex> lock(segment_history_mutex_);
     segment_history_.clear();
+    segment_history_id_.clear();
   }
-  has_routing_ = true;
   return true;
+}
+
+std::vector<routing::LaneWaypoint>
+ReferenceLineProvider::FutureRouteWaypoints() {
+  std::lock_guard<std::mutex> lock(pnc_map_mutex_);
+  return pnc_map_->FutureRouteWaypoints();
 }
 
 void ReferenceLineProvider::UpdateVehicleState(
     const VehicleState &vehicle_state) {
   std::lock_guard<std::mutex> lock(pnc_map_mutex_);
   vehicle_state_ = vehicle_state;
+  if (!pnc_map_->UpdateVehicleState(vehicle_state)) {
+    AERROR << "Failed to update vehicle state in pnc map";
+  }
 }
 
 bool ReferenceLineProvider::Start() {
@@ -158,12 +184,51 @@ void ReferenceLineProvider::Stop() {
   }
 }
 
+void ReferenceLineProvider::UpdateReferenceLine(
+    const std::list<ReferenceLine> &reference_lines,
+    const std::list<hdmap::RouteSegments> &route_segments) {
+  if (reference_lines.size() != route_segments.size()) {
+    AERROR << "The calculated reference line size(" << reference_lines.size()
+           << ") and route_segments size(" << route_segments.size()
+           << ") are different";
+    return;
+  }
+  std::lock_guard<std::mutex> lock(reference_lines_mutex_);
+  if (reference_lines_.size() != reference_lines.size()) {
+    reference_lines_ = reference_lines;
+    route_segments_ = route_segments;
+    return;
+  }
+  auto segment_iter = route_segments.begin();
+  auto internal_iter = reference_lines_.begin();
+  auto internal_segment_iter = route_segments_.begin();
+  for (auto iter = reference_lines.begin(); iter != reference_lines.end();
+       ++iter, ++segment_iter, ++internal_iter, ++internal_segment_iter) {
+    if (iter->reference_points().empty()) {
+      *internal_iter = *iter;
+      *internal_segment_iter = *segment_iter;
+      continue;
+    }
+    if (common::util::SamePointXY(iter->reference_points().front(),
+                                  internal_iter->reference_points().front()) &&
+        common::util::SamePointXY(iter->reference_points().back(),
+                                  internal_iter->reference_points().back()) &&
+        std::fabs(iter->Length() - internal_iter->Length()) <
+            common::math::kMathEpsilon) {
+      continue;
+    }
+    *internal_iter = *iter;
+    *internal_segment_iter = *segment_iter;
+  }
+}
+
 void ReferenceLineProvider::GenerateThread() {
   constexpr int32_t kSleepTime = 50;  // milliseconds
   while (!is_stop_) {
     std::this_thread::yield();
     std::this_thread::sleep_for(
         std::chrono::duration<double, std::milli>(kSleepTime));
+    double start_time = Clock::NowInSeconds();
     if (!has_routing_) {
       AERROR << "Routing is not ready.";
       continue;
@@ -174,12 +239,16 @@ void ReferenceLineProvider::GenerateThread() {
       AERROR << "Fail to get reference line";
       continue;
     }
-    std::unique_lock<std::mutex> lock(reference_lines_mutex__);
-    reference_lines_ = reference_lines;
-    route_segments_ = segments;
-    lock.unlock();
-    cv_has_reference_line_.notify_one();
+    UpdateReferenceLine(reference_lines, segments);
+    double end_time = Clock::NowInSeconds();
+    std::lock_guard<std::mutex> lock(reference_lines_mutex_);
+    last_calculation_time_ = end_time - start_time;
   }
+}
+
+double ReferenceLineProvider::LastTimeDelay() {
+  std::lock_guard<std::mutex> lock(reference_lines_mutex_);
+  return last_calculation_time_;
 }
 
 bool ReferenceLineProvider::GetReferenceLines(
@@ -187,24 +256,28 @@ bool ReferenceLineProvider::GetReferenceLines(
     std::list<hdmap::RouteSegments> *segments) {
   CHECK_NOTNULL(reference_lines);
   CHECK_NOTNULL(segments);
-  constexpr double kTimeout = 100;  // milliseconds
-  auto timeout_duration = std::chrono::duration<double, std::milli>(kTimeout);
+
   if (FLAGS_enable_reference_line_provider_thread) {
-    std::unique_lock<std::mutex> lock(reference_lines_mutex__);
-    if (!cv_has_reference_line_.wait_for(lock, timeout_duration, [this]() {
-          return !reference_lines_.empty();
-        })) {
-      lock.unlock();
-      AWARN << "Reference line calculation timeout (" << kTimeout
-            << "). Will retry...";
+    std::lock_guard<std::mutex> lock(reference_lines_mutex_);
+
+    if (!reference_lines_.empty()) {
+      reference_lines->assign(reference_lines_.begin(), reference_lines_.end());
+      segments->assign(route_segments_.begin(), route_segments_.end());
+      return true;
+    } else {
+      AWARN << "Reference line is NOT ready.";
       return false;
     }
-    reference_lines->assign(reference_lines_.begin(), reference_lines_.end());
-    segments->assign(route_segments_.begin(), route_segments_.end());
-    lock.unlock();
-    return true;
   } else {
-    return CreateReferenceLine(reference_lines, segments);
+    double start_time = Clock::NowInSeconds();
+    if (!CreateReferenceLine(reference_lines, segments)) {
+      AERROR << "Failed to create reference line";
+      return false;
+    }
+    UpdateReferenceLine(*reference_lines, *segments);
+    double end_time = Clock::NowInSeconds();
+    last_calculation_time_ = end_time - start_time;
+    return true;
   }
 }
 
@@ -222,43 +295,47 @@ void ReferenceLineProvider::PrioritzeChangeLane(
 }
 
 bool ReferenceLineProvider::CreateRouteSegments(
-    const common::VehicleState &vehicle_state, double look_backward_distance,
-    double look_forward_distance, std::list<hdmap::RouteSegments> *segments) {
+    const common::VehicleState &vehicle_state,
+    const double look_backward_distance, const double look_forward_distance,
+    std::list<hdmap::RouteSegments> *segments) {
   common::math::Vec2d point;
   point.set_x(vehicle_state.x());
   point.set_y(vehicle_state.y());
   {
     std::lock_guard<std::mutex> lock(pnc_map_mutex_);
-    if (!pnc_map_->GetRouteSegments(vehicle_state, look_backward_distance,
+    if (!pnc_map_->GetRouteSegments(look_backward_distance,
                                     look_forward_distance, segments)) {
       AERROR << "Failed to extract segments from routing";
       return false;
     }
   }
-  bool is_allow_change_lane = IsAllowChangeLane(point, *segments);
-  for (auto iter = segments->begin(); iter != segments->end();) {
-    if (!is_allow_change_lane && !iter->IsOnSegment()) {
-      iter = segments->erase(iter);
-    } else {
-      ++iter;
-    }
-  }
+
   if (FLAGS_prioritize_change_lane) {
     PrioritzeChangeLane(segments);
   }
   return !segments->empty();
 }
 
-double LookForwardDistance(const VehicleState &state) {
-  return (state.linear_velocity() * FLAGS_look_forward_time_sec >
-          FLAGS_look_forward_min_distance)
-             ? FLAGS_look_forward_distance
-             : FLAGS_look_forward_min_distance;
+double ReferenceLineProvider::LookForwardDistance(const VehicleState &state) {
+  auto forward_distance = state.linear_velocity() * FLAGS_look_forward_time_sec;
+
+  if (forward_distance > FLAGS_look_forward_mid_distance) {
+    return FLAGS_look_forward_long_distance;
+  }
+
+  if (forward_distance > FLAGS_look_forward_short_distance) {
+    return FLAGS_look_forward_mid_distance;
+  }
+
+  return FLAGS_look_forward_short_distance;
 }
 
 bool ReferenceLineProvider::CreateReferenceLine(
     std::list<ReferenceLine> *reference_lines,
     std::list<hdmap::RouteSegments> *segments) {
+  CHECK_NOTNULL(reference_lines);
+  CHECK_NOTNULL(segments);
+
   common::VehicleState vehicle_state;
   {
     std::lock_guard<std::mutex> lock(pnc_map_mutex_);
@@ -354,6 +431,13 @@ bool ReferenceLineProvider::ExtendReferenceLine(const VehicleState &state,
     return SmoothRouteSegment(*segments, reference_line);
   }
   lock.unlock();
+  if (prev_segment->IsWaypointOnSegment(shifted_segments.LastWaypoint())) {
+    *segments = *prev_segment;
+    segments->SetProperties(segment_properties);
+    *reference_line = *prev_ref;
+    ADEBUG << "Could not further extend reference line";
+    return true;
+  }
   hdmap::Path path;
   hdmap::PncMap::CreatePathFromLaneSegments(shifted_segments, &path);
   ReferenceLine new_ref(path);

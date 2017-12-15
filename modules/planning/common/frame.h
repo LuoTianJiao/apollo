@@ -37,6 +37,7 @@
 #include "modules/routing/proto/routing.pb.h"
 
 #include "modules/common/status/status.h"
+#include "modules/planning/common/change_lane_decider.h"
 #include "modules/planning/common/indexed_queue.h"
 #include "modules/planning/common/obstacle.h"
 #include "modules/planning/common/reference_line_info.h"
@@ -68,7 +69,7 @@ class Frame {
   void AddObstacle(const Obstacle &obstacle);
 
   const ReferenceLineInfo *FindDriveReferenceLineInfo();
-  const ReferenceLineInfo *DriveReferenceLinfInfo() const;
+  const ReferenceLineInfo *DriveReferenceLineInfo() const;
 
   const std::vector<const Obstacle *> obstacles() const;
 
@@ -99,7 +100,13 @@ class Frame {
    */
   const Obstacle *FindCollisionObstacle() const;
 
-  const Obstacle *CreateDestinationObstacle();
+  /**
+   * @brief create destination obstacle when needed.
+   * @return < 0 if error happend;
+   * @return 0 if destination obstacle is created
+   * @return > 0 if destination obstacle should not be created now.
+   */
+  int CreateDestinationObstacle();
 
  private:
   uint32_t sequence_num_ = 0;
@@ -116,6 +123,8 @@ class Frame {
   prediction::PredictionObstacles prediction_;
 
   ThreadSafeIndexedObstacles obstacles_;
+
+  ChangeLaneDecider change_lane_decider_;
 };
 
 class FrameHistory : public IndexedQueue<uint32_t, Frame> {

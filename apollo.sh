@@ -97,7 +97,7 @@ function generate_build_targets() {
     fail 'Build failed!'
   fi
   if ! $USE_ESD_CAN; then
-     BUILD_TARGETS=$(echo $BUILD_TARGETS |tr ' ' '\n' | grep -v "modules\/monitor\/hwmonitor\/hw\/esdcan" | grep -v "esd")
+     BUILD_TARGETS=$(echo $BUILD_TARGETS |tr ' ' '\n' | grep -v "esd")
   fi
 }
 
@@ -118,9 +118,7 @@ function build() {
     JOB_ARG="--jobs=3"
   fi
   echo "$BUILD_TARGETS" | xargs bazel build $JOB_ARG $DEFINES -c $@
-  if [ $? -eq 0 ]; then
-    success 'Build passed!'
-  else
+  if [ $? -ne 0 ]; then
     fail 'Build failed!'
   fi
 
@@ -129,6 +127,16 @@ function build() {
 
   # Update task info template on compiling.
   bazel-bin/modules/data/util/update_task_info --commit_id=$(git rev-parse HEAD)
+
+  if [ -d /apollo-simulator ] && [ -e /apollo-simulator/build.sh ]; then
+      cd /apollo-simulator && bash build.sh build
+      if [ $? -ne 0 ]; then
+        fail 'Build failed!'
+      fi
+  fi
+  if [ $? -eq 0 ]; then
+    success 'Build passed!'
+  fi
 }
 
 function cibuild() {
@@ -176,7 +184,8 @@ function build_py_proto() {
 
 function check() {
   local check_start_time=$(get_now)
-  apollo_build_dbg $@ && run_test && run_lint
+
+  bash $0 build && bash $0 "test" && bash $0 lint
 
   START_TIME=$check_start_time
   if [ $? -eq 0 ]; then
@@ -198,71 +207,62 @@ function warn_proprietary_sw() {
 }
 
 function release() {
-  ROOT_DIR=$HOME/.cache/release
-  if [ -d $ROOT_DIR ];then
-    rm -rf $ROOT_DIR
+  RELEASE_DIR="${HOME}/.cache/apollo_release"
+  if [ -d "${RELEASE_DIR}" ]; then
+    rm -fr "${RELEASE_DIR}"
   fi
-  mkdir -p $ROOT_DIR
+  APOLLO_DIR="${RELEASE_DIR}/apollo"
+  mkdir -p "${APOLLO_DIR}"
 
-  # modules
-  MODULES_DIR=$ROOT_DIR/modules
-  mkdir -p $MODULES_DIR
-  for m in control canbus localization decision perception \
-       prediction planning routing calibration third_party_perception
-  do
-    TARGET_DIR=$MODULES_DIR/$m
-    mkdir -p $TARGET_DIR
-     if [ -e bazel-bin/modules/$m/$m ]; then
-         cp bazel-bin/modules/$m/$m $TARGET_DIR
-     fi
-    if [ -d modules/$m/conf ];then
-        cp -r modules/$m/conf $TARGET_DIR
-    fi
-    if [ -d modules/$m/data ];then
-        cp -r modules/$m/data $TARGET_DIR
+  # Find binaries and convert from //path:target to path/target
+  BINARIES=$(bazel query "kind(cc_binary, //...)" | sed 's/^\/\///' | sed 's/:/\//')
+  # Copy binaries to release dir.
+  for BIN in ${BINARIES}; do
+    SRC_PATH="bazel-bin/${BIN}"
+    DST_PATH="${APOLLO_DIR}/${BIN}"
+    if [ -e "${SRC_PATH}" ]; then
+      mkdir -p "$(dirname "${DST_PATH}")"
+      cp "${SRC_PATH}" "${DST_PATH}"
     fi
   done
 
-  # control tools
-  mkdir $MODULES_DIR/control/tools
-  cp bazel-bin/modules/control/tools/pad_terminal $MODULES_DIR/control/tools
+  # modules data and conf
+  MODULES_DIR="${APOLLO_DIR}/modules"
+  mkdir -p $MODULES_DIR
+  for m in common control canbus localization decision perception dreamview map \
+       prediction planning routing calibration third_party_perception monitor \
+       drivers/delphi_esr \
+       drivers/gnss \
+       drivers/conti_radar
+  do
+    TARGET_DIR=$MODULES_DIR/$m
+    mkdir -p $TARGET_DIR
+    if [ -d modules/$m/conf ]; then
+      cp -r modules/$m/conf $TARGET_DIR
+    fi
+    if [ -d modules/$m/data ]; then
+      cp -r modules/$m/data $TARGET_DIR
+    fi
+  done
 
-  #remove all pyc file in modules/
+  # remove all pyc file in modules/
   find modules/ -name "*.pyc" | xargs -I {} rm {}
+
+  # tools
   cp -r modules/tools $MODULES_DIR
 
   # ros
-  cp -Lr bazel-apollo/external/ros $ROOT_DIR/
-  rm -f ${ROOT_DIR}/ros/*.tar.gz
+  cp -Lr bazel-apollo/external/ros ${APOLLO_DIR}/
+  rm -f ${APOLLO_DIR}/ros/*.tar.gz
 
   # scripts
-  cp -r scripts $ROOT_DIR
+  cp -r scripts ${APOLLO_DIR}
 
-  #dreamview
-  cp -Lr bazel-bin/modules/dreamview/dreamview.runfiles/apollo/modules/dreamview $MODULES_DIR
-  cp -r modules/dreamview/conf $MODULES_DIR/dreamview
+  # dreamview runfiles
+  cp -Lr bazel-bin/modules/dreamview/dreamview.runfiles/apollo/modules/dreamview/frontend $MODULES_DIR/dreamview
 
-  # map
-  mkdir $MODULES_DIR/map
-  cp -r modules/map/data $MODULES_DIR/map
-
-  # common data
-  mkdir $MODULES_DIR/common
-  cp -r modules/common/data $MODULES_DIR/common
-
-  # hmi
-  mkdir -p $MODULES_DIR/hmi/ros_bridge $MODULES_DIR/hmi/utils
-  cp bazel-bin/modules/hmi/ros_bridge/ros_bridge $MODULES_DIR/hmi/ros_bridge/
-  cp -r modules/hmi/conf $MODULES_DIR/hmi
-  cp -r modules/hmi/web $MODULES_DIR/hmi
-  cp -r modules/hmi/utils/*.py $MODULES_DIR/hmi/utils
-
-  # perception
+  # perception model
   cp -r modules/perception/model/ $MODULES_DIR/perception
-
-  # gnss config
-  mkdir -p $MODULES_DIR/drivers/gnss
-  cp -r modules/drivers/gnss/conf/ $MODULES_DIR/drivers/gnss
 
   # velodyne launch
   mkdir -p $MODULES_DIR/drivers/velodyne/velodyne
@@ -273,47 +273,36 @@ function release() {
   cp -r modules/drivers/usb_cam/launch $MODULES_DIR/drivers/usb_cam
 
   # lib
-  LIB_DIR=$ROOT_DIR/lib
-  mkdir $LIB_DIR
+  LIB_DIR="${APOLLO_DIR}/lib"
+  mkdir "${LIB_DIR}"
   if $USE_ESD_CAN; then
     warn_proprietary_sw
     for m in esd_can
     do
-        cp third_party/can_card_library/$m/lib/* $LIB_DIR
+      cp third_party/can_card_library/$m/lib/* $LIB_DIR
     done
-    # hw check
-    mkdir -p $MODULES_DIR/monitor/hardware/can
-    cp bazel-bin/modules/monitor/hardware/can/can_check $MODULES_DIR/monitor/hardware/can
-    mkdir -p $MODULES_DIR/monitor/hardware/gps
-    cp bazel-bin/modules/monitor/hardware/gps/gps_check $MODULES_DIR/monitor/hardware/gps
-    mkdir -p $MODULES_DIR/monitor/hardware/can/esdcan/esdcan_tools
-    cp bazel-bin/modules/monitor/hardware/can/esdcan/esdcan_tools/esdcan_test_app $MODULES_DIR/monitor/hardware/can/esdcan/esdcan_tools
   fi
   cp -r bazel-genfiles/external $LIB_DIR
   cp -r py_proto/modules $LIB_DIR
 
   # doc
-  cp -r docs $ROOT_DIR
-  cp LICENSE $ROOT_DIR
-  cp third_party/ACKNOWLEDGEMENT.txt $ROOT_DIR
-
-  # mobileye drivers
-  mkdir -p $MODULES_DIR/drivers/delphi_esr
-  cp bazel-bin/modules/drivers/delphi_esr/delphi_esr $MODULES_DIR/drivers/delphi_esr
-  cp -r modules/drivers/delphi_esr/conf $MODULES_DIR/drivers/delphi_esr
-  mkdir -p $MODULES_DIR/drivers/mobileye
-  cp bazel-bin/modules/drivers/mobileye/mobileye $MODULES_DIR/drivers/mobileye
-  cp -r modules/drivers/mobileye/conf  $MODULES_DIR/drivers/mobileye
-
-  # conti_radar
-  mkdir -p $MODULES_DIR/drivers/conti_radar
-  cp bazel-bin/modules/drivers/conti_radar/conti_radar $MODULES_DIR/drivers/conti_radar
-  cp -r modules/drivers/conti_radar/conf $MODULES_DIR/drivers/conti_radar
+  cp -r docs "${APOLLO_DIR}"
+  cp LICENSE "${APOLLO_DIR}"
+  cp third_party/ACKNOWLEDGEMENT.txt "${APOLLO_DIR}"
 
   # release info
-  META=${ROOT_DIR}/meta.txt
-  echo "Git commit: $(git rev-parse HEAD)" > $META
-  echo "Build time: $(get_now)" >>  $META
+  META="${APOLLO_DIR}/meta.ini"
+  echo "[Release]" > $META
+  echo "git_commit: $(git rev-parse HEAD)" >> $META
+  echo "car_type : LINCOLN.MKZ" >> $META
+  echo "arch : ${MACHINE_ARCH}" >> $META
+
+  # system libs
+  for LIB_PATH in /usr/local/local_integ/lib; do
+    DST_PATH="$(dirname "${RELEASE_DIR}${LIB_PATH}")"
+    mkdir -p "${DST_PATH}"
+    cp -r "${LIB_PATH}" "${DST_PATH}"
+  done
 }
 
 function gen_coverage() {
@@ -365,12 +354,22 @@ function run_test() {
   else
     echo "$BUILD_TARGETS" | grep -v "cnn_segmentation_test" | xargs bazel test $DEFINES --config=unit_test -c dbg --test_verbose_timeout_warnings $@
   fi
+  if [ $? -ne 0 ]; then
+    fail 'Test failed!'
+    return 1
+  fi
+
+  if [ -d /apollo-simulator ] && [ -e /apollo-simulator/build.sh ]; then
+      cd /apollo-simulator && bash build.sh test
+      if [ $? -ne 0 ]; then
+        fail 'Test failed!'
+        return 1
+      fi
+  fi
+
   if [ $? -eq 0 ]; then
     success 'Test passed!'
     return 0
-  else
-    fail 'Test failed!'
-    return 1
   fi
 }
 
@@ -575,7 +574,7 @@ function print_usage() {
   ${BLUE}build_usbcam${NONE}: build velodyne driver
   ${BLUE}build_opt_gpu${NONE}: build optimized binary with Caffe GPU mode support
   ${BLUE}build_fe${NONE}: compile frontend javascript code, this requires all the node_modules to be installed already
-  ${BLUE}build_no_perception${NONE}: run build build skip building perception module, useful when some perception dependencies are not satisified, e.g., CUDA, CUDNN, LIDAR, etc.
+  ${BLUE}build_no_perception [dbg|opt]${NONE}: run build build skip building perception module, useful when some perception dependencies are not satisified, e.g., CUDA, CUDNN, LIDAR, etc.
   ${BLUE}build_prof${NONE}: build for gprof support.
   ${BLUE}buildify${NONE}: fix style of BUILD files
   ${BLUE}check${NONE}: run build/lint/test, please make sure it passes before checking in new code
@@ -597,7 +596,11 @@ function main() {
   check_machine_arch
   check_esd_files
 
-  DEFINES="--define ARCH=${MACHINE_ARCH} --define CAN_CARD=${CAN_CARD} --cxxopt=-DUSE_ESD_CAN=${USE_ESD_CAN} --copt=-mavx2"
+  DEFINES="--define ARCH=${MACHINE_ARCH} --define CAN_CARD=${CAN_CARD} --cxxopt=-DUSE_ESD_CAN=${USE_ESD_CAN}"
+
+  if [ ${MACHINE_ARCH} == "x86_64" ]; then
+    DEFINES="${DEFINES} --copt=-mavx2"
+  fi
 
   local cmd=$1
   shift
@@ -612,13 +615,19 @@ function main() {
       apollo_build_dbg $@
       ;;
     build_prof)
-      DEFINES="${DEFINES} --cxxopt=-DCPU_ONLY  --copt='-pg' --cxxopt='-pg' --linkopt='-pg'"
+      DEFINES="${DEFINES} --config=cpu_prof --cxxopt=-DCPU_ONLY"
       apollo_build_dbg $@
       ;;
     build_no_perception)
       DEFINES="${DEFINES} --cxxopt=-DCPU_ONLY"
       NOT_BUILD_PERCEPTION=true
-      apollo_build_dbg $@
+      if [ "$1" == "opt" ]; then
+        shift
+        apollo_build_opt $@
+      elif [ "$1" == "dbg" ]; then
+        shift
+        apollo_build_dbg $@
+      fi
       ;;
     cibuild)
       DEFINES="${DEFINES} --cxxopt=-DCPU_ONLY"

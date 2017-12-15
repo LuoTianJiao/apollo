@@ -15,6 +15,9 @@
  *****************************************************************************/
 
 #include "modules/planning/common/planning_gflags.h"
+
+DEFINE_bool(planning_test_mode, false, "Enable planning test mode.");
+
 DEFINE_int32(planning_loop_rate, 10, "Loop rate for planning node");
 
 DEFINE_string(planning_adapter_config_filename,
@@ -38,13 +41,15 @@ DEFINE_double(
     look_backward_distance, 30,
     "look backward this distance when creating reference line from routing");
 
-DEFINE_double(
-    look_forward_distance, 250,
-    "look forward this distance when creating reference line from routing");
-
-DEFINE_double(look_forward_min_distance, 100,
-              "minimal look forward this distance when creating reference line "
+DEFINE_double(look_forward_short_distance, 60,
+              "short look forward this distance when creating reference line "
+              "from routing when ADC is slow");
+DEFINE_double(look_forward_mid_distance, 150,
+              "medium look forward this distance when creating reference line "
               "from routing");
+DEFINE_double(
+    look_forward_long_distance, 250,
+    "look forward this distance when creating reference line from routing");
 DEFINE_double(look_forward_time_sec, 8,
               "look forward time times adc speed to calculate this distance "
               "when creating reference line from routing");
@@ -83,6 +88,17 @@ DEFINE_bool(prioritize_change_lane, false,
 DEFINE_bool(reckless_change_lane, false,
             "Alway allow the vehicle change lane. The vehicle may contineous "
             "change lane. This is mainly test purpose");
+DEFINE_double(change_lane_fail_freeze_time, 3.0,
+              "seconds. Not allowed to change lane this amount of time "
+              "if it just finished change lane or failed to change lane");
+DEFINE_double(change_lane_success_freeze_time, 3.0,
+              "seconds. Not allowed to change lane this amount of time "
+              "if it just finished change lane or failed to change lane");
+DEFINE_double(change_lane_min_length, 30.0,
+              "meters. If the change lane target has longer length than this "
+              "threshold, it can shortcut the default lane.");
+DEFINE_bool(enable_change_lane_decider, false,
+            "True to use change lane state machine decider.");
 
 DEFINE_int32(max_history_frame_num, 1, "The maximum history frame number");
 
@@ -90,8 +106,12 @@ DEFINE_double(max_collision_distance, 0.1,
               "considered as collision if distance (meters) is smaller than or "
               "equal to this (meters)");
 
-DEFINE_double(replan_distance_threshold, 5.0,
+DEFINE_double(replan_lateral_distance_threshold, 5.0,
               "The distance threshold of replan");
+DEFINE_double(replan_longitudinal_distance_threshold, 5.0,
+              "The distance threshold of replan");
+DEFINE_bool(estimate_current_vehicle_state, true,
+            "Estimate current vehicle state.");
 
 DEFINE_bool(enable_reference_line_provider_thread, true,
             "Enable reference line provider thread.");
@@ -153,15 +173,17 @@ DEFINE_double(static_obstacle_speed_threshold, 1.0,
               "obstacles are considered as static obstacle if its speed is "
               "less than this value (m/s)");
 DEFINE_bool(enable_nudge_decision, true, "enable nudge decision");
-DEFINE_double(static_decision_nudge_l_buffer, 0.5, "l buffer for nudge");
+DEFINE_double(static_decision_nudge_l_buffer, 0.3, "l buffer for nudge");
 DEFINE_double(lateral_ignore_buffer, 2.0,
               "If an obstacle's lateral distance is further away than this "
               "distance, ignore it");
-DEFINE_double(stop_distance_obstacle, 10.0,
-              "stop distance from in-lane obstacle (meters)");
-DEFINE_double(stop_distance_destination, 3.0,
+DEFINE_double(max_stop_distance_obstacle, 10.0,
+              "max stop distance from in-lane obstacle (meters)");
+DEFINE_double(min_stop_distance_obstacle, 3.0,
+              "min stop distance from in-lane obstacle (meters)");
+DEFINE_double(stop_distance_destination, 0.5,
               "stop distance from destination line");
-DEFINE_double(stop_distance_traffic_light, 0.5,
+DEFINE_double(stop_distance_traffic_light, 3.0,
               "stop distance from destination line");
 DEFINE_double(destination_check_distance, 5.0,
               "if the distance between destination and ADC is less than this,"
@@ -185,6 +207,9 @@ DEFINE_double(virtual_stop_wall_height, 2.0,
               "virtual stop wall height (meters)");
 DEFINE_string(reference_line_end_obstacle_id, "REF_END",
               "Obstacle id for the end of reference line obstacle");
+DEFINE_double(signal_expire_time_sec, 5.0,
+              "consider the signal msg is expired if its timestamp over "
+              "this threshold (second)");
 
 // Prediction Part
 DEFINE_double(prediction_total_time, 5.0, "Total prediction time");
@@ -223,9 +248,11 @@ DEFINE_double(crosswalk_strick_l_distance, 4.0,
 DEFINE_double(crosswalk_loose_l_distance, 5.0,
               "loose stop rule beyond this l_distance");
 
+// according to DMV's rule, turn signal should be on within 200 ft from
+// intersection.
 DEFINE_double(
-    turn_signal_distance, 80,
-    "meters. If there is a turn within this distance, use turn signal");
+    turn_signal_distance, 60.96,
+    "In meters. If there is a turn within this distance, use turn signal");
 
 // planning config file
 DEFINE_string(planning_config_file,

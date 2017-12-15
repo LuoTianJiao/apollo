@@ -118,7 +118,7 @@ void Prediction::RunOnce(const PerceptionObstacles& perception_obstacles) {
   ADEBUG << "Received a perception message ["
          << perception_obstacles.ShortDebugString() << "].";
 
-  double start_timestamp = Clock::NowInSecond();
+  double start_timestamp = Clock::NowInSeconds();
   ObstaclesContainer* obstacles_container = dynamic_cast<ObstaclesContainer*>(
       ContainerManager::instance()->GetContainer(
           AdapterConfig::PERCEPTION_OBSTACLES));
@@ -130,9 +130,27 @@ void Prediction::RunOnce(const PerceptionObstacles& perception_obstacles) {
   auto prediction_obstacles =
       PredictorManager::instance()->prediction_obstacles();
   prediction_obstacles.set_start_timestamp(start_timestamp);
-  prediction_obstacles.set_end_timestamp(Clock::NowInSecond());
+  prediction_obstacles.set_end_timestamp(Clock::NowInSeconds());
+
+  for (auto const& prediction_obstacle :
+       prediction_obstacles.prediction_obstacle()) {
+    for (auto const& trajectory : prediction_obstacle.trajectory()) {
+      for (auto const& trajectory_point : trajectory.trajectory_point()) {
+        if (!IsValidTrajectoryPoint(trajectory_point)) {
+          AERROR << "Invalid trajectory point ["
+                 << trajectory_point.ShortDebugString() << "]";
+          return;
+        }
+      }
+    }
+  }
 
   Publish(&prediction_obstacles);
+
+  ADEBUG << "Received a perception message ["
+         << perception_obstacles.ShortDebugString() << "].";
+  ADEBUG << "Published a prediction message ["
+         << prediction_obstacles.ShortDebugString() << "].";
 }
 
 Status Prediction::OnError(const std::string& error_msg) {
@@ -141,7 +159,8 @@ Status Prediction::OnError(const std::string& error_msg) {
 
 bool Prediction::IsValidTrajectoryPoint(
     const TrajectoryPoint& trajectory_point) {
-  return (!std::isnan(trajectory_point.path_point().x())) &&
+  return trajectory_point.has_path_point() &&
+         (!std::isnan(trajectory_point.path_point().x())) &&
          (!std::isnan(trajectory_point.path_point().y())) &&
          (!std::isnan(trajectory_point.path_point().theta())) &&
          (!std::isnan(trajectory_point.v())) &&

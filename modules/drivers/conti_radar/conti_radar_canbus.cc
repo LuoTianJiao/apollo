@@ -31,10 +31,13 @@ namespace drivers {
 namespace conti_radar {
 
 std::string ContiRadarCanbus::Name() const {
-  return FLAGS_hmi_name;
+  return FLAGS_canbus_driver_name;
 }
 
 apollo::common::Status ContiRadarCanbus::Init() {
+  AdapterManager::Init(FLAGS_adapter_config_filename);
+  AINFO << "The adapter manager is successfully initialized.";
+
   if (!::apollo::common::util::GetProtoFromFile(FLAGS_sensor_conf_file,
                                                 &conti_radar_conf_)) {
     return OnError("Unable to load canbus conf file: " +
@@ -70,16 +73,14 @@ apollo::common::Status ContiRadarCanbus::Init() {
   }
   AINFO << "The can receiver is successfully initialized.";
 
-  AdapterManager::Init(FLAGS_adapter_config_filename);
-
-  AINFO << "The adapter manager is successfully initialized.";
-
   return Status::OK();
 }
 
 apollo::common::ErrorCode ContiRadarCanbus::ConfigureRadar() {
   RadarConfig200 radar_config;
+  radar_config.set_radar_conf(conti_radar_conf_.radar_conf());
   SenderMessage<ContiRadar> sender_message(RadarConfig200::ID, &radar_config);
+  sender_message.Update();
   return can_client_->SendSingleFrame({sender_message.CanFrame()});
 }
 

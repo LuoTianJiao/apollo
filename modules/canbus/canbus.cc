@@ -37,17 +37,17 @@ using apollo::drivers::canbus::CanClientFactory;
 using apollo::control::ControlCommand;
 using apollo::common::time::Clock;
 
-std::string Canbus::Name() const { return FLAGS_hmi_name; }
+std::string Canbus::Name() const { return FLAGS_canbus_module_name; }
 
 Status Canbus::Init() {
+  AdapterManager::Init(FLAGS_adapter_config_filename);
+  AINFO << "The adapter manager is successfully initialized.";
+
   // load conf
   if (!common::util::GetProtoFromFile(FLAGS_canbus_conf_file, &canbus_conf_)) {
     return OnError("Unable to load canbus conf file: " +
                    FLAGS_canbus_conf_file);
   }
-
-  AdapterManager::Init(FLAGS_adapter_config_filename);
-  AINFO << "The adapter manager is successfully initialized.";
 
   AINFO << "The canbus conf file is loaded: " << FLAGS_canbus_conf_file;
   ADEBUG << "Canbus_conf:" << canbus_conf_.ShortDebugString();

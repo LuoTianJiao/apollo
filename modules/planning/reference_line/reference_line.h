@@ -51,7 +51,6 @@ class ReferenceLine {
    * The stitching strategy is to use current reference points as much as
    * possible. The following two examples show two successful stitch cases.
    *
-   * @example
    * Example 1
    * this:   |--------A-----x-----B------|
    * other:                 |-----C------x--------D-------|
@@ -138,6 +137,9 @@ class ReferenceLine {
   static ReferencePoint Interpolate(const ReferencePoint& p0, const double s0,
                                     const ReferencePoint& p1, const double s1,
                                     const double s);
+  ReferencePoint InterpolateWithMatchedIndex(
+      const ReferencePoint& p0, const double s0, const ReferencePoint& p1,
+      const double s1, const hdmap::InterpolatedIndex& index) const;
 
   static double FindMinDistancePoint(const ReferencePoint& p0, const double s0,
                                      const ReferencePoint& p1, const double s1,

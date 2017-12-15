@@ -26,7 +26,6 @@
 
 #include "IpIpoptApplication.hpp"
 #include "IpSolveStatistics.hpp"
-#include "glog/logging.h"
 
 #include "modules/common/time/time.h"
 #include "modules/planning/common/planning_gflags.h"
@@ -47,7 +46,7 @@ SpiralReferenceLineSmoother::SpiralReferenceLineSmoother(
 bool SpiralReferenceLineSmoother::Smooth(
     const ReferenceLine& raw_reference_line,
     ReferenceLine* const smoothed_reference_line) {
-  const double start_timestamp = Clock::NowInSecond();
+  const double start_timestamp = Clock::NowInSeconds();
   std::vector<double> opt_x;
   std::vector<double> opt_y;
   std::vector<double> opt_theta;
@@ -179,7 +178,7 @@ bool SpiralReferenceLineSmoother::Smooth(
     return false;
   }
   *smoothed_reference_line = ReferenceLine(ref_points);
-  const double end_timestamp = Clock::NowInSecond();
+  const double end_timestamp = Clock::NowInSeconds();
   ADEBUG << "Spiral reference line smoother time: "
          << (end_timestamp - start_timestamp) * 1000 << " ms.";
   return true;
